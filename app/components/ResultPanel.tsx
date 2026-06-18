@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { GeneratedResult } from "@/lib/generator";
+import type { CaseInput } from "@/lib/generator";
+import type { EscalationPayload } from "@/app/api/send-escalation/route";
 
 interface CopyButtonProps {
   text: string;
@@ -46,10 +48,7 @@ function Section({ title, icon, children, copyText, accentColor = "var(--gold)" 
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span style={{ color: accentColor, fontSize: 14 }}>{icon}</span>
-          <span
-            className="text-[10px] font-medium tracking-widest uppercase"
-            style={{ color: "var(--text-muted)" }}
-          >
+          <span className="text-[10px] font-medium tracking-widest uppercase" style={{ color: "var(--text-muted)" }}>
             {title}
           </span>
         </div>
@@ -60,20 +59,12 @@ function Section({ title, icon, children, copyText, accentColor = "var(--gold)" 
   );
 }
 
-interface ChecklistProps {
-  items: string[];
-  iconColor: string;
-  icon: string;
-}
-
-function Checklist({ items, iconColor, icon }: ChecklistProps) {
+function Checklist({ items, iconColor, icon }: { items: string[]; iconColor: string; icon: string }) {
   return (
     <ul className="flex flex-col gap-2">
       {items.map((item, i) => (
         <li key={i} className="flex items-start gap-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
-          <span className="mt-0.5 shrink-0" style={{ color: iconColor, fontSize: 13 }}>
-            {icon}
-          </span>
+          <span className="mt-0.5 shrink-0" style={{ color: iconColor, fontSize: 13 }}>{icon}</span>
           {item}
         </li>
       ))}
@@ -81,23 +72,57 @@ function Checklist({ items, iconColor, icon }: ChecklistProps) {
   );
 }
 
+type SendState = "idle" | "sending" | "sent" | "error";
+
 interface Props {
   result: GeneratedResult;
+  input: CaseInput;
 }
 
-export default function ResultPanel({ result }: Props) {
+export default function ResultPanel({ result, input }: Props) {
   const {
-    customerReply,
-    internalNote,
-    escalationChecklist,
-    recommendedStatus,
-    assignedTeam,
-    canSay,
-    cannotPromise,
-    whenToEscalate,
-    recommendedNextAction,
-    warningMessage,
+    customerReply, internalNote, escalationChecklist,
+    recommendedStatus, assignedTeam, canSay, cannotPromise,
+    whenToEscalate, recommendedNextAction, warningMessage,
   } = result;
+
+  const [sendState, setSendState] = useState<SendState>("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const isUrgent =
+    input.riskLevel === "High" ||
+    /urgent|escalat|hold/i.test(recommendedStatus);
+
+  async function handleSendEscalation() {
+    setSendState("sending");
+    setErrorMsg("");
+    try {
+      const payload: EscalationPayload = {
+        caseId: input.caseId,
+        customerRef: input.customerRef,
+        issueType: input.issueType,
+        riskLevel: input.riskLevel,
+        assignedTeam,
+        recommendedStatus,
+        internalNote,
+        escalationChecklist,
+        recommendedNextAction,
+      };
+      const res = await fetch("/api/send-escalation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Failed to send");
+      setSendState("sent");
+      setTimeout(() => setSendState("idle"), 4000);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Unknown error");
+      setSendState("error");
+      setTimeout(() => setSendState("idle"), 5000);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -115,7 +140,7 @@ export default function ResultPanel({ result }: Props) {
         {[
           { label: "Recommended status", value: recommendedStatus, gold: true },
           { label: "Assigned team", value: assignedTeam, gold: false },
-          { label: "Priority", value: result.warningMessage ? "High" : "Normal", gold: false },
+          { label: "Priority", value: warningMessage ? "High" : "Normal", gold: false },
         ].map(({ label, value, gold }) => (
           <div
             key={label}
@@ -125,15 +150,47 @@ export default function ResultPanel({ result }: Props) {
             <div className="text-[10px] tracking-widest uppercase mb-1.5" style={{ color: "var(--text-muted)" }}>
               {label}
             </div>
-            <div
-              className="text-[13px] font-medium"
-              style={{ color: gold ? "var(--gold)" : "var(--text-primary)" }}
-            >
+            <div className="text-[13px] font-medium" style={{ color: gold ? "var(--gold)" : "var(--text-primary)" }}>
               {value}
             </div>
           </div>
         ))}
       </div>
+
+      {isUrgent && (
+        <div
+          className="rounded-lg px-4 py-3 flex items-center justify-between gap-3"
+          style={{ background: "rgba(163,45,45,0.1)", border: "0.5px solid #7a3030" }}
+        >
+          <div>
+            <p className="text-[13px] font-medium" style={{ color: "#F09595" }}>
+              This case requires manager attention
+            </p>
+            <p className="text-[12px] mt-0.5" style={{ color: "#9a9490" }}>
+              Send an escalation email to notify the manager immediately.
+            </p>
+          </div>
+          <button
+            onClick={handleSendEscalation}
+            disabled={sendState === "sending" || sendState === "sent"}
+            className="shrink-0 px-4 py-2 rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-60 transition-colors whitespace-nowrap"
+            style={{
+              background: sendState === "sent" ? "rgba(99,153,34,0.2)" : "rgba(163,45,45,0.3)",
+              border: `0.5px solid ${sendState === "sent" ? "#3B6D11" : "#A32D2D"}`,
+              color: sendState === "sent" ? "#97C459" : "#F09595",
+            }}
+          >
+            {sendState === "sending" && "Sending…"}
+            {sendState === "sent" && "✓ Email sent"}
+            {sendState === "error" && "✗ Failed — retry"}
+            {sendState === "idle" && "Send Escalation Email"}
+          </button>
+        </div>
+      )}
+
+      {sendState === "error" && errorMsg && (
+        <p className="text-[12px] px-1" style={{ color: "#F09595" }}>Error: {errorMsg}</p>
+      )}
 
       <Section title="Customer reply" icon="✉" copyText={customerReply}>
         <pre

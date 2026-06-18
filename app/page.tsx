@@ -108,7 +108,7 @@ export default function Home() {
 
         <main className="flex-1 overflow-y-auto p-5">
           {result ? (
-            <ResultPanel result={result} />
+            <ResultPanel result={result} input={form} />
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
               <div className="text-4xl" style={{ color: "var(--dark-border)" }}>☰</div>
